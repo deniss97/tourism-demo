@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Подбор туров — демо</title>
+
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Подбор «куда поехать»: месяц → страны карточками (вода, воздух, рейс, популярность) → курорты, районы и отели →
+   поиск туров на сайтах агентства; внизу календарь «страна × месяц». Две версии из одного файла (build_demo_site.py):
+   менеджерская (демо) и туристическая (без «модели», с запросом в выбранный офис). Цвета — токены, светлая и тёмная. */
+:root {
+  --bg: #f4f6f8; --card: #ffffff; --ink: #1d2330; --muted: #64708a; --line: #e1e5ec;
+  --accent: #0b6bcb; --accent-ink: #ffffff; --accent-soft: #e6f0fb;
+  --ok: #1d7f4a; --ok-soft: #e4f3ea; --warn: #9a5a00; --warn-soft: #fcf0de; --star: #c98a00;
+  --cold: #d7e6f4; --warm: #f2b27a; --cell-ink: #1d2330; --cta: #d42a20; --cta-ink: #ffffff;
+  --font: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+  --bg: #12161d; --card: #1a2029; --ink: #e7ebf1; --muted: #9aa5b8; --line: #2a3240;
+  --accent: #5ea1ec; --accent-ink: #0d1520; --accent-soft: #1c2c41;
+  --ok: #5cc690; --ok-soft: #173026; --warn: #e2a64a; --warn-soft: #362812; --star: #e6b23c;
+  --cold: #1e3147; --warm: #7a4421; --cell-ink: #e7ebf1; --cta: #ff6a5c; --cta-ink: #1a0b09; } }
+:root[data-theme="dark"] { color-scheme: dark;
+  --bg: #12161d; --card: #1a2029; --ink: #e7ebf1; --muted: #9aa5b8; --line: #2a3240;
+  --accent: #5ea1ec; --accent-ink: #0d1520; --accent-soft: #1c2c41;
+  --ok: #5cc690; --ok-soft: #173026; --warn: #e2a64a; --warn-soft: #362812; --star: #e6b23c;
+  --cold: #1e3147; --warm: #7a4421; --cell-ink: #e7ebf1; --cta: #ff6a5c; --cta-ink: #1a0b09; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 var(--font); background: var(--bg); color: var(--ink); }
+header.topbar { background: var(--card); border-bottom: 1px solid var(--line);
+  padding-block: 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.topbar b { font-weight: 650; } header.topbar .muted { margin-left: 6px; }
+main { max-width: 1080px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px;
+  padding-block: 16px 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-size: 22px; margin: 4px 0 0; text-wrap: balance; } h2 { font-size: 18px; margin: 10px 0 0; text-wrap: balance; } h3 { font-size: 16px; margin: 0 0 6px; }
+.note { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 10px; min-width: 0; align-content: start;
+  grid-template-columns: minmax(0, 1fr); }   /* столбец не шире карточки: на телефоне содержимое не распирает страницу */
+.muted { color: var(--muted); } .small { font-size: 13px; } .hint { color: var(--muted); font-size: 13px; font-weight: 400; }
+.months { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.months button { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 9px 0;
+  font: inherit; font-weight: 500; cursor: pointer; }
+.months button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+@media (max-width: 720px) { .months { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.filters { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: flex-start; }
+.filters > div { display: grid; gap: 5px; }
+.flabel { font-size: 13px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips label { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px;
+  cursor: pointer; background: var(--card); font-size: 14px; }
+.chips input { margin: 0; accent-color: var(--accent); }
+.chips label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+details.more > summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+details.more[open] > summary { margin-bottom: 8px; }
+.countries { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+@media (max-width: 520px) { .countries { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .cc { padding: 10px; } .cc .top { flex-wrap: wrap; } }
+.cc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px;
+  text-align: left; font: inherit; color: var(--ink); cursor: pointer; min-width: 0; align-content: start; }
+.cc:hover { border-color: var(--muted); }
+.cc[aria-pressed="true"] { border: 2px solid var(--accent); padding: 11px 13px; }
+.cc .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.cc .name { font-weight: 650; font-size: 16px; }
+.temps { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-variant-numeric: tabular-nums; font-size: 14px; }
+.temps .k { color: var(--muted); font-size: 13px; }
+.temps .v { font-weight: 600; }
+.score { height: 4px; background: var(--accent-soft); border-radius: 2px; overflow: hidden; }
+.score span { display: block; height: 100%; background: var(--accent); }
+.tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin: 2px 4px 0 0; }
+.tag.ok { background: var(--ok-soft); color: var(--ok); } .tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.plain { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+button.main { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; justify-self: start; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.row:first-of-type { border-top: 0; } .row input { margin-top: 5px; accent-color: var(--accent); } .row > div { min-width: 0; flex: 1; }
+.stars { color: var(--star); letter-spacing: 1px; }
+.row.resort { cursor: default; }
+.areas { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+button.area { font: inherit; font-size: 13px; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+button.area[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+button.area .walk { color: var(--ok); font-size: 12px; }
+.ghead { padding: 10px 0 2px; border-top: 1px solid var(--line); }
+.ghead + .row { border-top: 0; }
+.finish { display: grid; gap: 10px; margin-top: 14px; }
+.ctas { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+a.cta { display: grid; gap: 4px; background: var(--cta); color: var(--cta-ink); text-decoration: none; border-radius: 12px; padding: 18px 22px; }
+a.cta b { font-size: 19px; line-height: 1.25; } a.cta span { font-size: 13px; opacity: .9; }
+a.cta:hover { filter: brightness(1.06); } a.cta:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.row.hotel { cursor: default; } .row.hotel label { cursor: pointer; }
+button.rname { font: inherit; font-weight: 650; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+button.rname[aria-pressed="true"] { color: var(--accent); text-decoration-color: var(--accent); }
+a.tv { font-size: 13px; color: var(--accent); white-space: nowrap; margin-left: 4px; }
+a.main-tv { display: inline-block; margin: 6px 0 10px; font-size: 15px; font-weight: 600; background: var(--accent); color: var(--accent-ink); padding: 8px 14px; border-radius: 8px; text-decoration: none; white-space: normal; margin-left: 0; }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.tourist { border: 2px solid var(--accent); }
+.tcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.tcards .card { padding: 12px 14px; gap: 2px; }
+.scroll { overflow-x: auto; }
+table.cal { border-collapse: separate; border-spacing: 2px; font-size: 13px; font-variant-numeric: tabular-nums; min-width: 640px; width: 100%; }
+table.cal th { font-weight: 500; color: var(--muted); padding: 4px; text-align: center; }
+table.cal th.c { text-align: left; color: var(--ink); white-space: nowrap; padding-right: 8px; }
+table.cal th.cur { color: var(--accent); font-weight: 700; }
+table.cal td { text-align: center; padding: 5px 2px; border-radius: 4px; color: var(--cell-ink); cursor: pointer; }
+table.cal td.cur { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.cal td.none { color: var(--muted); background: transparent; cursor: default; }
+input.t { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--card); color: var(--ink); width: 100%; }
+label.f { display: grid; gap: 6px; font-weight: 600; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 16px 24px; }
+footer p { margin: 4px auto; max-width: 760px; } footer a { color: var(--muted); }
+footer .links { display: flex; flex-wrap: wrap; gap: 4px 14px; justify-content: center; }
+select.t { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--card); color: var(--ink); width: 100%;
+  min-width: 0; max-width: 100%; text-overflow: ellipsis; }   /* длинные названия офисов не распирают страницу на телефоне */
+label.f { min-width: 0; }
+textarea.req { width: 100%; min-height: 96px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 14px;
+  background: var(--bg); color: var(--ink); resize: vertical; }
+select.t, textarea.req { font-weight: 400; }
+@media (max-width: 520px) { textarea.req { min-height: 140px; } }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.leadform { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.leadform .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.leadform .consent { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; font-size: 13px; color: var(--muted); }
+.leadform .consent input { margin-top: 3px; accent-color: var(--accent); }
+.leadform a { color: var(--link, var(--accent)); }
+.leadform button.main:disabled { opacity: .6; cursor: default; }
+.actions a, .actions button { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 9px 14px; font: inherit;
+  font-weight: 600; text-decoration: none; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.actions .wa { background: var(--ok); border-color: var(--ok); color: var(--accent-ink); }
+.office { display: grid; gap: 2px; font-size: 14px; } .office a { color: var(--accent); }
+.tgcard { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--ink); text-decoration: none; transition: border-color .15s, transform .15s; }
+.tgcard:hover { border-color: var(--accent); transform: translateY(-1px); }
+.tgcard img { width: 34px; height: 34px; flex: none; }
+.tgcard b { display: block; font-size: 15px; } .tgcard .small { display: block; color: var(--muted); font-weight: 400; }
+.tgcard .go { margin-left: auto; flex: none; color: var(--accent); font-weight: 600; white-space: nowrap; }
+@media (max-width: 420px) { .tgcard .go { display: none; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+
+<header class="topbar"><b>Подбор туров</b><span class="muted small">помощник менеджера · демо</span></header>
+
+<main>
+  <div class="note">Демо: рекомендации посчитаны настоящей моделью заранее — новый клиент, 9 ночей, двое взрослых.
+    Данных агентства и клиентов здесь нет: ни продаж, ни цен, ни истории поездок. Температуры — многолетние нормы,
+    прямые рейсы из Москвы — по открытым расписаниям на октябрь 2026, перед продажей проверяйте у туроператора.
+    <a href="turist/">Версия для туристов →</a></div>
+  
+
+  <section class="card" aria-labelledby="h-when">
+    <h1 id="h-when">Когда едет клиент?</h1>
+    <div class="months" id="months" role="group" aria-label="Месяц поездки"></div>
+    <div class="filters">
+      <div><span class="flabel">Вода от</span><div class="chips" id="f-sea"></div></div>
+      <div><span class="flabel">Воздух днём от</span><div class="chips" id="f-air"></div></div>
+      <div><span class="flabel">Перелёт</span><div class="chips"><label><input type="checkbox" id="f-direct"> только прямой рейс из Москвы</label></div></div>
+    </div>
+    <details class="more"><summary>Пожелания к отелю: звёзды, питание</summary>
+      <div class="filters">
+        <div><span class="flabel">Звёзды</span><div class="chips" id="stars"></div></div>
+        <div><span class="flabel">Питание</span><div class="chips" id="nutr"></div></div>
+      </div>
+    </details>
+  </section>
+
+  <section aria-live="polite">
+    <h2 id="h-countries">Куда поехать</h2>
+    <p class="small muted" id="countries-note">Загрузка…</p>
+    <div class="countries" id="countries"></div>
+  </section>
+
+  <section id="detail"></section>
+  <section id="tourist"></section>
+
+  <section class="card" aria-labelledby="h-cal">
+    <h2 id="h-cal" style="margin:0">Вода по месяцам</h2>
+    <p class="small muted" style="margin:0">Средняя температура моря на главных курортах страны, °C. Нажмите на ячейку — откроется подбор на этот месяц.</p>
+    <div class="scroll"><table class="cal" id="cal"></table></div>
+  </section>
+</main>
+<footer id="foot">Рекомендации — модель по истории продаж сети агентств (U-ON); погода — нормы Open-Meteo; рейсы — открытые расписания авиакомпаний; до моря и пляж — © участники OpenStreetMap.</footer>
+
+
+<script>
+(() => {
+  // настройки версии — подставляет build_demo_site.py: mode (manager / tourist), данные, офисы, Метрика, юр. ссылки
+  const CFG = {"mode": "manager", "data": "data.json", "offices": [], "network": {}, "metrika": null, "legal": {}};
+  const T = CFG.mode === "tourist";
+  // встройка в чужую страницу (HTML-секция Creatium): разметка и стили — в Shadow DOM элемента CFG.host
+  const host = CFG.host ? document.getElementById(CFG.host) : null;
+  const ROOT = (host && host.shadowRoot) || document;
+  const $ = (s) => ROOT.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+  const SHORT = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+  const MONTHS_IN = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
+  const STARS = [["", "любые"], ["5", "5★"], ["4", "4★"]];
+  const NUTR = [["", "любое"], ["AI", "всё включено"], ["UAI", "ультра всё включено"], ["BB", "завтраки"]];
+  const NUTR_NAME = { RO: "без питания", BB: "завтраки", HB: "полупансион", FB: "полный пансион", AI: "всё включено", UAI: "ультра всё включено" };
+  const SEA = [["0", "любая"], ["21", "21°"], ["24", "24°"], ["26", "26°"], ["28", "28°"]];
+  const AIR = [["0", "любой"], ["25", "25°"], ["28", "28°"], ["30", "30°"]];
+  const WINTER = new Set([11, 12, 1, 2, 3]);
+  let D = null, month = 1, country = null, lastQ = null;
+  let area = null, walkOnly = false, showAll = false, resortSel = null;   // район курорта, «есть куда выйти», все отели
+
+  const radio = (name, items, sel) => items.map(([v, l]) => `<label><input type="radio" name="${name}" value="${v}" ${v === sel ? "checked" : ""}> ${esc(l)}</label>`).join("");
+  $("#months").innerHTML = SHORT.map((m, i) => `<button type="button" data-m="${i + 1}" aria-label="${MONTHS[i]}">${m}</button>`).join("");
+  $("#f-sea").innerHTML = radio("sea", SEA, "21");   // по умолчанию — пляжный отдых: без России и Турции зимой
+  $("#f-air").innerHTML = radio("air", AIR, "0");
+  $("#stars").innerHTML = radio("stars", STARS, "");
+  $("#nutr").innerHTML = radio("nutr", NUTR, "");
+
+  const val = (name) => ROOT.querySelector(`input[name=${name}]:checked`).value;
+  const deg = (x) => (x == null ? "" : `${Math.round(x)}°`);
+  const range = (xs) => { xs = xs.filter((x) => x != null).map(Math.round); if (!xs.length) return null;
+    const lo = Math.min(...xs), hi = Math.max(...xs); return lo === hi ? `${lo}°` : `${lo}–${hi}°`; };
+  const weather = (c, r, m) => { const w = D.climate[`${c}|${r}`]; const x = w && w[String(m)]; return x ? { air: x[0], sea: x[1], rain: x[2] } : {}; };
+  const H = (i) => D.hotels[i];
+  // Яндекс Метрика: цели — если в настройках есть номер счётчика (configs/tourist_site.yaml)
+  // Яндекс Метрика (если есть номер счётчика) и/или свой сбор событий в лог сервера (CFG.beacon, nginx)
+  const MK = [].concat(CFG.metrika || []);   // номер счётчика или несколько (сайт и рекламный кабинет)
+  const goal = (name, params = {}) => {
+    try { if (window.ym) MK.forEach((id) => window.ym(id, "reachGoal", name, { mode: CFG.mode, ...params })); } catch (e) {}
+    try {
+      if (CFG.beacon) {
+        const q = new URLSearchParams({ e: name, v: CFG.mode, ...Object.fromEntries(Object.entries(params).filter(([, x]) => x != null)) });
+        navigator.sendBeacon ? navigator.sendBeacon(`${CFG.beacon}?${q}`) : fetch(`${CFG.beacon}?${q}`, { method: "POST", keepalive: true });
+      }
+    } catch (e) {}
+  };
+  if (MK.length) {
+    window.ym = window.ym || function () { (window.ym.a = window.ym.a || []).push(arguments); }; window.ym.l = Date.now();
+    const s = document.createElement("script"); s.async = true; s.src = `https://mc.yandex.ru/metrika/tag.js?id=${MK[0]}`; document.head.appendChild(s);
+    MK.forEach((id) => window.ym(id, "init", { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: true,
+      referrer: document.referrer, url: location.href }));
+    const ck = ROOT.querySelector("#cookies"); if (ck) ck.hidden = false;
+  }
+
+  // курорты страны для температур: пляжные из справочника, иначе все с климатом
+  function resortsOf(c) {
+    if (D.dest[c]) return D.dest[c].resorts;
+    return Object.keys(D.climate).filter((k) => k.startsWith(c + "|")).map((k) => k.split("|")[1]);
+  }
+  function climateOf(c, m) {
+    const ws = resortsOf(c).map((r) => weather(c, r, m));
+    const sea = ws.map((w) => w.sea).filter((x) => x != null), air = ws.map((w) => w.air).filter((x) => x != null);
+    const rainy = ws.length && ws.filter((w) => w.rain >= 15).length > ws.length / 2;
+    return { sea, air, rainy, seaMax: sea.length ? Math.max(...sea) : null, airMax: air.length ? Math.max(...air) : null,
+             seaAvg: sea.length ? sea.reduce((a, b) => a + b, 0) / sea.length : null };
+  }
+  function flight(c, m) {
+    const d = D.dest[c];
+    if (!d) return { direct: false, html: "" };
+    if (d.check) return { direct: false, html: `<span class="tag plain">рейс уточнить</span>` };
+    const s = d.season;
+    if (s === "all" || (s === "winter" && WINTER.has(m)) || (s === "summer" && !WINTER.has(m)))
+      return { direct: true, html: `<span class="tag ok" title="${esc(d.carrier || "")}${d.airports ? ": " + esc(d.airports) : ""}">прямой рейс</span>` };
+    if (s === "winter") return { direct: false, html: `<span class="tag plain">летом рейс уточнить</span>` };
+    return { direct: false, html: `<span class="tag plain">с пересадкой</span>` };
+  }
+
+  function monthCountries() {
+    const key = `${month}|${val("stars")}|${val("nutr")}`;
+    const ranked = D.m[key] || [];
+    const score = Object.fromEntries(ranked);
+    const top = ranked.length ? ranked[0][1] : 1;
+    const names = new Set([...ranked.slice(0, 10).map(([c]) => c), ...Object.keys(D.dest)]);
+    return [...names].map((c) => ({ c, score: score[c] || 0, rel: (score[c] || 0) / top, clim: climateOf(c, month), fl: flight(c, month) }))
+      .filter((x) => x.clim.sea.length || x.clim.air.length);
+  }
+
+  function renderCountries() {
+    const sea = Number(val("sea")), air = Number(val("air")), direct = $("#f-direct").checked;
+    const all = monthCountries();
+    const shown = all.filter((x) => (!sea || (x.clim.seaMax ?? -99) >= sea) && (!air || (x.clim.airMax ?? -99) >= air) && (!direct || x.fl.direct))
+      .sort((a, b) => b.score - a.score || (b.clim.seaAvg ?? 0) - (a.clim.seaAvg ?? 0));
+    $("#h-countries").textContent = `Куда поехать в ${MONTHS_IN[month - 1]}`;
+    const f = [sea ? `вода от ${sea}°` : "", air ? `воздух от ${air}°` : "", direct ? "прямой рейс" : ""].filter(Boolean);
+    $("#countries-note").textContent = `${shown.length} из ${all.length} направлений${f.length ? " · " + f.join(", ") : ""}. ` +
+      (T ? "Сначала — куда чаще всего едут наши туристы в этом месяце." : "Сначала — что чаще берут в этом месяце по оценке модели.");
+    $("#countries").innerHTML = shown.map((x, k) => {
+      const s = range(x.clim.sea), a = range(x.clim.air);
+      const rec = x.score > 0 && k < 5 ? `<span class="tag ok">${T ? "выбирают чаще" : "часто берут"}</span>`
+        : x.score === 0 && !T ? `<span class="tag plain">продаж мало</span>` : "";
+      return `<button type="button" class="cc" data-c="${esc(x.c)}" aria-pressed="${x.c === country}">
+        <span class="top"><span class="name">${esc(x.c)}</span><span>${rec}</span></span>
+        <span class="temps">${s ? `<span class="k">вода</span><span class="v">${s}</span>` : `<span class="k">вода</span><span class="muted">нет данных</span>`}
+          ${a ? `<span class="k">воздух</span><span class="v">${a}</span>` : ""}</span>
+        <span>${x.fl.html}${x.clim.rainy ? `<span class="tag warn">сезон дождей</span>` : ""}</span>
+        <span class="score" title="${T ? "популярность у наших туристов" : "оценка модели"}"><span style="width:${Math.round(100 * x.rel)}%"></span></span></button>`;
+    }).join("") || `<div class="card muted">Под эти условия в ${MONTHS_IN[month - 1]} ничего нет — ослабьте фильтр по воде или воздуху.</div>`;
+  }
+
+  // Ссылка в поиск туров Турвизора — тот же модуль, что стоит на сайтах агентств, читает параметры из адреса страницы.
+  // Сайты агентства с модулем поиска Турвизора — ссылка с параметрами сразу даёт выдачу с ценами и заявкой агентству
+  // (проверено 22.10): TourPrem — поиск всех офисов сети, «Магазин горящих путёвок» — Щёлково и Сергиев Посад.
+  const SITES = {
+    tourprem: { name: "TourPrem", url: "https://tourprem.ru/poisk-turov", who: "офисы в Москве, Щёлкове, Ивантеевке и Королёве" },
+    mgp: { name: "Магазин горящих путёвок", url: "https://c-mgp.ru/", who: "Щёлково и Сергиев Посад" },
+  };
+  let site = "tourprem";
+  try { const v = localStorage.getItem("tv-site"); if (SITES[v] && !T) site = v; } catch (e) {}
+  const TV_MEAL = { BB: 3, HB: 4, FB: 5, AI: 7, UAI: 9 };
+  const ddmmyyyy = (d) => `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+  function tvUrl({ c, regions, hotels, q, dest = site }) {
+    const now = new Date(), y = now.getFullYear() + (q.month - 1 < now.getMonth() ? 1 : 0);
+    let from = new Date(y, q.month - 1, 1);
+    if (from <= now) from = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
+    const to = new Date(from); to.setDate(to.getDate() + 13);   // две недели вылетов внутри выбранного месяца
+    const p = { ts_dosearch: 1, s_flyfrom: 1, s_country: D.tv.countries[c], s_adults: 2, s_nights_from: 7, s_nights_to: 10,
+      s_j_date_from: ddmmyyyy(from), s_j_date_to: ddmmyyyy(to) };
+    if (regions && regions.length) p.s_region_to = regions.join(",");
+    if (hotels && hotels.length) p.x_hotel_codes = hotels.join(",");
+    if (q.stars) { p.s_stars = q.stars; p.s_stars_better = 1; }
+    if (q.nutr && TV_MEAL[q.nutr]) p.s_meal = TV_MEAL[q.nutr];
+    return `${SITES[dest].url}?${Object.entries(p).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
+  }
+  const tvLink = (args, text, cls = "tv") => D.tv && D.tv.countries[args.c] ? `<a class="${cls}" href="${tvUrl(args)}" target="_blank" rel="noopener">${text}</a>` : "";
+
+  function renderDetail() {
+    $("#tourist").innerHTML = "";
+    if (!country) { $("#detail").innerHTML = ""; return; }
+    const q = { month, stars: val("stars"), nutr: val("nutr") };
+    lastQ = q;
+    const a = D.a[`${country}|${q.month}|${q.stars}|${q.nutr}`];
+    const label = `${MONTHS[q.month - 1]}${q.stars ? ` · ${q.stars}★` : ""}${q.nutr ? ` · ${NUTR_NAME[q.nutr]}` : ""}`;
+    // большая кнопка внизу, после курортов и отелей (пожелание заказчицы): туры и цены на сайте агентства
+    const cta = (regions, what) => D.tv && D.tv.countries[country] ? `<div class="ctas">${Object.entries(SITES).map(([k, x]) =>
+      `<a class="cta" href="${tvUrl({ c: country, regions, q, dest: k })}" target="_blank" rel="noopener">
+      <b>Ещё больше вариантов и цены — ${esc(x.name)} →</b><span>${esc(x.who)} · ${esc(what)} · ${esc(label)} · из Москвы, 7–10 ночей, двое взрослых</span></a>`).join("")}</div>` : "";
+    const siteSwitch = T ? "" : `<div class="chips small" role="group" aria-label="Куда ведут ссылки"><span class="muted">Ссылки «туры» и «цены» ведут на:</span>
+      ${Object.entries(SITES).map(([k, x]) => `<label><input type="radio" name="site" value="${k}" ${k === site ? "checked" : ""}> ${esc(x.name)}</label>`).join("")}</div>`;
+    if (!a) {
+      const rs = resortsOf(country).map((r) => { const w = weather(country, r, q.month);
+        return `<div class="row" style="cursor:default"><div><b>${esc(r)}</b> ${w.air != null ? `<span class="tag">воздух ${deg(w.air)}${w.sea != null ? ` · вода ${deg(w.sea)}` : ""}</span>` : ""}</div></div>`; }).join("");
+      $("#detail").innerHTML = `<h2>${esc(country)} — ${esc(label)}</h2><div class="card"><h3>Курорты</h3>${rs}
+        <p class="small muted" style="margin:0">${T ? "Отели и цены на ваши даты — в поиске туров по кнопке ниже." : "Продаж сети по этой стране мало — отели смотрите в поиске туров."}</p></div>
+        ${T ? requestCard() : ""}${cta([], country)}`;
+      if (T) updateRequest();
+      return;
+    }
+    // курорты → районы и бухты (configs/areas.yaml); «есть куда выйти» — променад или торговая улица рядом
+    const areasOf = (r) => (D.areas || {})[`${country}|${r}`] || {};
+    const resortTv = (r) => (D.tv.resorts || {})[`${country}|${r}`] || [];
+    // в U-ON бывают «курорты» вроде «Суточные» или «Makady bay» — показываем только известные (с климатом)
+    const resorts = a.r.filter((r) => D.climate[`${country}|${r}`]);
+    const rRows = resorts.map((r) => { const w = weather(country, r, q.month), ar = areasOf(r);
+      const chips = Object.entries(ar).map(([n, x]) => `<button type="button" class="area" data-area="${esc(r)}|${esc(n)}" aria-pressed="${area === r + "|" + n}"
+        title="${esc(x.walk || x.note || "")}">${esc(n)}${x.walk ? ` <span class="walk">есть куда выйти</span>` : ""}</button>`).join("");
+      return `<div class="row resort"><input type="checkbox" data-resort="${esc(country)}|${esc(r)}" aria-label="${esc(r)} в подборку"><div>
+        <button type="button" class="rname" data-rsel="${esc(r)}" aria-pressed="${resortSel === r}">${esc(r)}</button>
+        ${w.air != null ? `<span class="tag">воздух ${deg(w.air)}${w.sea != null ? ` · вода ${deg(w.sea)}` : ""}</span>` : ""}
+        ${w.rain >= 15 ? `<span class="tag warn">дождливо</span>` : ""} ${tvLink({ c: country, regions: resortTv(r), q }, "туры →")}
+        ${chips ? `<div class="areas">${chips}</div>` : ""}</div></div>`; }).join("");
+    const areaInfo = (h) => (h.z ? areasOf(h.r)[h.z] : null) || {};
+    let list = a.h.map((i) => ({ ...H(i), i })).filter((h) => !h.r || resorts.includes(h.r) || !D.climate[`${country}|${h.r}`]);
+    if (resortSel) list = list.filter((h) => h.r === resortSel);
+    if (area) list = list.filter((h) => `${h.r}|${h.z}` === area);
+    if (walkOnly) list = list.filter((h) => areaInfo(h).walk);
+    const total = list.length;
+    if (!showAll) list = list.slice(0, 12);
+    const groups = [];
+    for (const h of list) { const k = `${h.r || ""}|${h.z || ""}`; let g = groups.find((x) => x.k === k); if (!g) groups.push(g = { k, h }); (g.items = g.items || []).push(h); }
+    const hRows = groups.map((g) => { const info = areaInfo(g.h);
+      const regs = g.h.z && info.tv ? info.tv : resortTv(g.h.r);
+      const head = `<div class="ghead"><b>${esc(g.h.r || "")}${g.h.z ? ` · ${esc(g.h.z)}` : ""}</b>${info.walk ? ` <span class="tag ok">есть куда выйти</span>` : ""}
+        ${tvLink({ c: country, regions: regs, q }, g.h.z ? "все отели района →" : "все отели курорта →")}
+        <div class="small muted">${esc(info.walk || info.note || (T || g.h.z || !Object.keys(areasOf(g.h.r)).length ? "" : "район не определён"))}</div></div>`;
+      return head + g.items.map((h) => { const tags = [];
+        if (q.stars) tags.push(h.s === Number(q.stars) ? `<span class="tag ok">звёзды подходят</span>` : `<span class="tag warn">другие звёзды</span>`);
+        if (q.nutr) tags.push((h.f || "").split(", ").includes(q.nutr) ? `<span class="tag ok">питание подходит</span>` : `<span class="tag warn">другое питание</span>`);
+        const w = weather(country, h.r, q.month);
+        if (w.sea != null) tags.push(`<span class="tag">вода ${deg(w.sea)}</span>`);
+        const sea = h.d == null ? "" : h.d < 15 ? "у самого моря" : `до моря ≈${h.d} м`;
+        if (h.d != null) tags.unshift(h.d <= 100 ? `<span class="tag ok">1-я линия · ${sea}</span>` : `<span class="tag">${sea}</span>`);
+        if (h.b) tags.splice(1, 0, `<span class="tag">пляж: ${esc(h.b)}</span>`);
+        const facts = [h.z ? esc(h.z) : esc(h.r || ""), h.f ? `питание ${esc(h.f)}` : ""].filter(Boolean).join(" · ");
+        return `<div class="row hotel"><input type="checkbox" data-hotel="${h.i}" id="h${h.i}"><div><label for="h${h.i}"><b>${esc(h.n)}</b> ${h.s ? `<span class="stars">${"★".repeat(h.s)}</span>` : ""}</label>
+          ${h.t ? tvLink({ c: country, hotels: [h.t], q }, "цены →") : ""}
+          <div class="small muted">${facts}</div><div>${tags.join("")}</div></div></div>`; }).join(""); }).join("");
+    const hasAreas = resorts.some((r) => Object.keys(areasOf(r)).length);
+    const chipsF = `<div class="chips">${hasAreas ? `<label><input type="checkbox" id="walk" ${walkOnly ? "checked" : ""}> есть куда выйти</label>` : ""}
+      ${resortSel ? `<button type="button" class="area" id="resort-reset">${esc(resortSel)} ×</button>` : ""}
+      ${area ? `<button type="button" class="area" id="area-reset">${esc(area.split("|")[1])} ×</button>` : ""}</div>`;
+    const sel = area ? { regions: (areasOf(area.split("|")[0])[area.split("|")[1]] || {}).tv || resortTv(area.split("|")[0]), what: `${country}, ${area.split("|")[1]}` }
+      : resortSel ? { regions: resortTv(resortSel), what: `${country}, ${resortSel}` } : { regions: [], what: country };
+    $("#detail").innerHTML = `<h2>${esc(country)} — ${esc(label)}</h2>
+      <div class="pair"><div class="card"><h3>Курорты и районы</h3>${rRows}
+        <p class="small muted" style="margin:0">Нажмите на курорт или район — останутся его отели.${T ? " Галочкой отметьте понравившиеся — они попадут в запрос менеджеру." : " Районы и метки — черновик, уточняются."}</p></div>
+        <div class="card"><h3>${T ? "Отели, которые выбирают наши туристы" : "Отели, которые чаще берут у нас"}</h3>
+        <p class="small muted" style="margin:0">${T ? "Цены и наличие на ваши даты — по ссылкам «цены» и по большой кнопке внизу. Отметьте галочкой понравившиеся." : "По продажам сети. Все отели с ценами, звёздами и рейтингом — по ссылкам «туры» и «цены» в поиске туров."}</p>
+        ${siteSwitch}${chipsF}${hRows || `<p class="muted">Здесь среди рекомендованных отелей нет — смотрите «туры →» у курорта.</p>`}
+        ${total > list.length ? `<button type="button" class="area" id="more">Показать все ${total}</button>` : ""}</div></div>
+      <div class="finish">${T ? requestCard() : CFG.host || CFG.prod ? "" : `<button type="button" class="main" id="collect">Собрать подборку для туриста</button><p class="small muted" id="collect-msg" style="margin:0"></p>`}
+      ${cta(sel.regions, sel.what)}
+      ${T ? tgCard((CFG.channel || {}).podbor, "Горящие туры — каждый день в Telegram",
+        "Подборки с ценой за человека и вылетом в ближайшие две недели") : ""}</div>`;
+    if (T) updateRequest();
+  }
+
+  // --- туристическая версия: запрос менеджеру выбранного офиса (WhatsApp, MAX, Telegram, звонок, копирование) ---
+  let officeId = "";
+  try { officeId = localStorage.getItem("office") || ""; } catch (e) {}
+  const officeOf = () => CFG.offices.find((o) => o.id === officeId) || null;
+  const tel = (s) => "+" + String(s).replace(/\D/g, "").replace(/^8/, "7");
+  // телефоны офиса в формате «8 (…)»: первый — для связи; WhatsApp — на мобильный офиса, иначе — на общий номер сети
+  const phonesOf = (o) => (o && (o.phones || (o.phone ? [o.phone] : []))) || [];
+  const mobileWa = (s) => { const d = String(s).replace(/\D/g, "").replace(/^8/, "7"); return /^79\d{9}$/.test(d) ? d : null; };
+  function requestCard() {
+    const opts = CFG.offices.map((o) => `<option value="${esc(o.id)}" ${o.id === officeId ? "selected" : ""}>${esc(o.name)} · ${esc(o.city)}</option>`).join("");
+    return `<div class="card"><h3>Понравилось? Отправьте запрос менеджеру</h3>
+      <p class="small muted" style="margin:0">Подберём тур на ваши даты и состав, проверим цены у туроператоров. Отмеченные галочкой курорты и отели уже в тексте запроса.</p>
+      <label class="f" for="office">Удобный офис<select class="t" id="office"><option value="">— выберите офис —</option>${opts}</select></label>
+      <div class="office" id="office-card"></div>
+      <label class="f" for="req">Текст запроса<textarea class="req" id="req" readonly></textarea></label>
+      ${CFG.leadUrl ? leadForm() : ""}
+      ${CFG.leadUrl ? `<p class="small muted" style="margin:0">Или напишите сами — текст запроса подставится:</p>` : ""}
+      <div class="actions" id="req-actions"></div><p class="small muted" id="req-msg" style="margin:0"></p></div>`;
+  }
+  // Telegram-канал горящих туров: CFG.channel — пригласительные ссылки (только tourprem.ru), по ним бот считает, откуда
+  // подписались (deploy/channel_stats); клик — цель «channel»
+  function tgCard(href, title, text) {
+    return href ? `<a class="tgcard" href="${esc(href)}" target="_blank" rel="noopener" data-goal="channel">
+      <img src="/kuda/assets/icons/telegram.svg" alt=""><span><b>${title}</b><span class="small">${text}</span></span>
+      <span class="go">Открыть →</span></a>` : "";
+  }
+  // заявка в U-ON выбранного офиса (только на tourprem.ru: CFG.leadUrl — сервис deploy/podbor_leads)
+  function leadForm() {
+    return `<form class="leadform" id="leadform" novalidate>
+      <b>Оставьте телефон — менеджер выбранного офиса перезвонит</b>
+      <div class="grid2"><label class="f">Имя<input class="t" name="name" autocomplete="name" maxlength="60" required></label>
+        <label class="f">Телефон<input class="t" name="phone" type="tel" autocomplete="tel" placeholder="8 (___) ___-__-__" required></label></div>
+      <div class="grid2"><label class="f">Как удобнее связаться<select class="t" name="contact"><option>Позвонить</option><option>WhatsApp</option>
+        <option>Telegram</option><option>MAX</option></select></label>
+        <label class="f">Комментарий<input class="t" name="comment" maxlength="300" placeholder="даты, сколько человек, бюджет"></label></div>
+      <input class="hp" name="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <label class="consent"><input type="checkbox" name="consent"><span>Согласен(на) на обработку персональных данных:
+        <a href="/obrabotka-pd" target="_blank" rel="noopener">условия</a>, <a href="/politika" target="_blank" rel="noopener">политика конфиденциальности</a></span></label>
+      <button type="submit" class="main" id="lead-send">Отправить заявку</button>
+      <p class="small" id="lead-msg" role="status" style="margin:0"></p></form>`;
+  }
+  async function sendLead(form) {
+    const f = Object.fromEntries(new FormData(form));
+    const msg = $("#lead-msg"), btn = $("#lead-send");
+    if (!f.name.trim() || f.phone.replace(/\D/g, "").length < 10) { msg.textContent = "Укажите имя и телефон."; return; }
+    if (!form.consent.checked) { msg.textContent = "Отметьте согласие на обработку персональных данных."; return; }
+    const q = lastQ || {};
+    btn.disabled = true; msg.textContent = "Отправляем…";
+    try {
+      const r = await fetch(CFG.leadUrl, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...f, consent: true, office: officeId, text: requestText(), month: q.month, stars: q.stars,
+          nutr: q.nutr, country, page: location.href }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || "Не получилось отправить заявку.");
+      goal("lead", { office: officeId || "—" });
+      form.innerHTML = `<b>Заявка отправлена${d.office ? ` в офис «${esc(d.office)}»` : ""}.</b>
+        <span class="small">Менеджер перезвонит в рабочее время — обычно в течение часа.</span>
+        ${tgCard((CFG.channel || {}).lead, "Пока ждёте звонка — загляните в наш Telegram",
+          "Горящие туры из Москвы каждый день, реальные цены")}`;
+      // опрос «откуда вы про нас узнали?» (demo/skin/survey.js, только на tourprem.ru)
+      if (window.tpSurvey) setTimeout(() => window.tpSurvey.open({ context: "kuda", ref: d.ref }), 1200);
+    } catch (e) {
+      btn.disabled = false;
+      const o = officeOf();
+      msg.textContent = `${e.message} ${phonesOf(o).length ? `Позвоните, пожалуйста: ${phonesOf(o)[0]}.` : "Позвоните, пожалуйста, в офис."}`;
+    }
+  }
+  function requestText() {
+    const q = lastQ; if (!q || !country) return "";
+    const resorts = [...ROOT.querySelectorAll("[data-resort]:checked")].map((x) => x.dataset.resort.split("|")[1]);
+    const hotels = [...ROOT.querySelectorAll("[data-hotel]:checked")].map((x) => H(Number(x.dataset.hotel)).n);
+    const place = resorts.length ? resorts.join(", ") : area ? area.split("|")[1] : resortSel || "";
+    const parts = [place ? `${country}, ${place}` : country, MONTHS[q.month - 1], q.stars ? `${q.stars}★ и выше` : "", q.nutr ? NUTR_NAME[q.nutr] : ""].filter(Boolean);
+    let s = `Здравствуйте! Подберите, пожалуйста, тур: ${parts.join(", ")}.`;
+    if (hotels.length) s += ` Понравились отели: ${hotels.join("; ")}.`;
+    const o = officeOf(); if (o) s += ` Удобный офис: ${o.name}, ${o.city}.`;
+    return s + " Даты и количество туристов уточню.";
+  }
+  function updateRequest() {
+    const box = $("#req"); if (!box) return;
+    const s = requestText(); box.value = s;
+    const o = officeOf(), net = CFG.network || {};
+    $("#office-card").innerHTML = o ? `<b>${esc(o.name)} · ${esc(o.city)}</b><span>${esc(o.address)}</span>
+      ${phonesOf(o).length ? `<span>Телефон: ${phonesOf(o).map((ph) => `<a href="tel:${tel(ph)}" data-goal="call">${esc(ph)}</a>`).join(", ")}</span>` : ""}
+      ${o.page ? `<span><a href="${esc(o.page)}" target="_blank" rel="noopener">Страница офиса →</a></span>` : ""}`
+      : `<span class="muted">Выберите офис — «Позвонить» и WhatsApp сразу будут этого офиса.</span>`;
+    const wa = (o && o.whatsapp) || phonesOf(o).map(mobileWa).find(Boolean) || net.whatsapp;
+    $("#req-actions").innerHTML = [
+      wa ? `<a class="wa" href="https://wa.me/${esc(wa)}?text=${encodeURIComponent(s)}" target="_blank" rel="noopener" data-goal="whatsapp">Написать в WhatsApp</a>` : "",
+      // MAX: у офисов «Магазина горящих путёвок» — их профиль с c-mgp.ru, у остальных — бот TourPrem; текст не подставляется
+      ((o && o.site === "mgp" && net.max_mgp) || net.max) ? `<a href="${esc((o && o.site === "mgp" && net.max_mgp) || net.max)}" target="_blank" rel="noopener" data-goal="max">Написать в MAX</a>` : "",
+      // Telegram (только «Магазин горящих путёвок»): ссылка на аккаунт с готовым текстом — t.me/<имя>?text=…
+      o && o.site === "mgp" && net.telegram_mgp ? `<a href="${esc(net.telegram_mgp)}?text=${encodeURIComponent(s)}" target="_blank" rel="noopener" data-goal="telegram">Написать в Telegram</a>` : "",
+      phonesOf(o).length ? `<a href="tel:${tel(phonesOf(o)[0])}" data-goal="call">Позвонить ${esc(phonesOf(o)[0])}</a>` : "",
+      `<button type="button" id="copy">Скопировать текст</button>`].join("");
+  }
+
+  function renderCalendar() {
+    const cs = Object.keys(D.dest).map((c) => ({ c, row: SHORT.map((_, i) => climateOf(c, i + 1).seaAvg) }))
+      .filter((x) => x.row.some((v) => v != null))
+      .sort((a, b) => (b.row[month - 1] ?? -99) - (a.row[month - 1] ?? -99));
+    const color = (t) => { const p = Math.max(0, Math.min(100, Math.round((t - 16) / 14 * 100)));
+      return `background: color-mix(in srgb, var(--warm) ${p}%, var(--cold))`; };
+    $("#cal").innerHTML = `<thead><tr><th></th>${SHORT.map((m, i) => `<th class="${i + 1 === month ? "cur" : ""}" scope="col">${m}</th>`).join("")}</tr></thead>
+      <tbody>${cs.map((x) => `<tr><th class="c" scope="row">${esc(x.c)}</th>${x.row.map((v, i) => v == null ? `<td class="none">—</td>`
+        : `<td class="${i + 1 === month ? "cur" : ""}" style="${color(v)}" data-c="${esc(x.c)}" data-m="${i + 1}" title="${esc(x.c)}, ${MONTHS[i]}: вода ${deg(v)}">${Math.round(v)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  }
+
+  function renderAll() {
+    ROOT.querySelectorAll("#months button").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.m) === month)));
+    renderCountries(); renderDetail(); renderCalendar();
+  }
+
+  function touristView() {
+    const hotels = [...ROOT.querySelectorAll("[data-hotel]:checked")].map((x) => H(Number(x.dataset.hotel)));
+    const resorts = [...ROOT.querySelectorAll("[data-resort]:checked")].map((x) => x.dataset.resort.split("|"));
+    if (!hotels.length && !resorts.length) { $("#collect-msg").textContent = "Отметьте хотя бы один курорт или отель."; return; }
+    $("#collect-msg").textContent = "";
+    const q = lastQ;
+    const rc = resorts.map(([c, r]) => { const w = weather(c, r, q.month);
+      return `<div class="card"><b>${esc(r)}</b><span class="small muted">${esc(c)}</span>${w.air != null ? `<span class="small">В ${MONTHS_IN[q.month - 1]} обычно: воздух ${deg(w.air)}${w.sea != null ? `, вода ${deg(w.sea)}` : ""}</span>` : ""}</div>`; }).join("");
+    const hc = hotels.map((h) => { const w = weather(h.c, h.r, q.month);
+      return `<div class="card"><b>${esc(h.n)}</b>${h.s ? `<span class="stars">${"★".repeat(h.s)}</span>` : ""}<span class="small muted">${esc(h.r || "")}, ${esc(h.c || "")}</span>
+        ${h.f ? `<span class="small">Питание: ${esc(h.f)}</span>` : ""}${w.air != null ? `<span class="small">Погода: воздух ${deg(w.air)}${w.sea != null ? `, вода ${deg(w.sea)}` : ""}</span>` : ""}</div>`; }).join("");
+    $("#tourist").innerHTML = `<div class="card tourist"><span class="hint">Так подборку увидит турист — в рабочей версии это отдельная страница по ссылке</span>
+      <h1>Варианты на ${MONTHS[q.month - 1]}</h1><p class="muted" style="margin:0">9 ночей · взрослых 2</p>
+      ${rc ? `<h3>Курорты</h3><div class="tcards">${rc}</div>` : ""}${hc ? `<h3>Отели</h3><div class="tcards">${hc}</div>` : ""}
+      <form class="card" id="book"><h3>Понравилось? Оставьте контакты — менеджер забронирует</h3>
+        <div class="grid2"><label class="f" for="bn">Имя<input class="t" id="bn" required></label>
+        <label class="f" for="bp">Телефон<input class="t" id="bp" required inputmode="tel"></label></div>
+        <button type="submit" class="main">Забронировать</button><p class="small muted" id="book-msg" style="margin:0"></p></form></div>`;
+    $("#book").addEventListener("submit", (e) => { e.preventDefault(); $("#book-msg").textContent = "В демо заявка никуда не отправляется. В рабочей версии она уходит менеджеру в U-ON."; });
+    $("#tourist").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  ROOT.addEventListener("click", (e) => {
+    const lk = e.target.closest("a.cta, a.tv, [data-goal]");
+    if (lk) goal(lk.dataset.goal || "search", { country, site: lk.classList.contains("cta") || lk.classList.contains("tv") ? (lk.href.includes("c-mgp") ? "mgp" : "tourprem") : undefined });
+    if (e.target.id === "copy") {
+      const s = $("#req").value;
+      const done = () => { $("#req-msg").textContent = "Текст скопирован — вставьте его в любой мессенджер."; goal("copy"); };
+      (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject()).then(done).catch(() => { $("#req").select(); $("#req-msg").textContent = "Выделите текст и скопируйте его."; });
+      return;
+    }
+    const m = e.target.closest("#months button");
+    if (m && D) { month = Number(m.dataset.m); goal("month", { month }); renderAll(); return; }
+    const ab = e.target.closest("button.area[data-area]");
+    if (ab && D) { area = area === ab.dataset.area ? null : ab.dataset.area; resortSel = null; showAll = true; renderDetail(); return; }
+    if (e.target.id === "area-reset") { area = null; renderDetail(); return; }
+    const rs = e.target.closest("button.rname");
+    if (rs && D) { resortSel = resortSel === rs.dataset.rsel ? null : rs.dataset.rsel; area = null; showAll = !!resortSel; renderDetail(); return; }
+    if (e.target.id === "resort-reset") { resortSel = null; renderDetail(); return; }
+    if (e.target.id === "more") { showAll = true; renderDetail(); return; }
+    const c = e.target.closest(".cc");
+    if (c && D) { country = c.dataset.c === country ? null : c.dataset.c; area = null; resortSel = null; showAll = false; if (country) goal("country", { country, month });
+      renderCountries(); renderDetail();
+      if (country) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    const td = e.target.closest("#cal td[data-c]");
+    if (td && D) { month = Number(td.dataset.m); country = td.dataset.c; area = null; resortSel = null; showAll = false; renderAll();
+      $("#h-countries").scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    if (e.target.id === "collect") touristView();
+  });
+  ROOT.addEventListener("change", (e) => {
+    if (!D) return;
+    if (["sea", "air"].includes(e.target.name) || e.target.id === "f-direct") renderCountries();
+    if (["stars", "nutr"].includes(e.target.name)) { renderCountries(); renderDetail(); }
+    if (e.target.id === "walk") { walkOnly = e.target.checked; showAll = walkOnly; renderDetail(); }
+    if (T && (e.target.matches("[data-hotel], [data-resort]"))) updateRequest();
+    if (e.target.id === "office") { officeId = e.target.value; try { localStorage.setItem("office", officeId); } catch (err) {} if (officeId) goal("office", { office: officeId }); updateRequest(); }
+    if (e.target.name === "site" && SITES[e.target.value]) { site = e.target.value; try { localStorage.setItem("tv-site", site); } catch (err) {} renderDetail(); }
+  });
+  ROOT.addEventListener("submit", (e) => { if (e.target.id === "leadform") { e.preventDefault(); sendLead(e.target); } });
+
+  if (T) $("#legal").innerHTML = [["offices", "Наши офисы"], ["privacy", "Политика конфиденциальности"], ["offer", "Публичная оферта"]]
+    .filter(([k]) => CFG.legal[k]).map(([k, n]) => `<a href="${esc(CFG.legal[k])}" target="_blank" rel="noopener">${n}</a>`).join("");
+  // страницы «Куда поехать на море в <месяце>» — только на tourprem.ru (CFG.monthPages: [адрес, месяц])
+  if (T && CFG.monthPages) { const el = $("#month-pages"); el.hidden = false;
+    el.innerHTML = "<span>На море по месяцам:</span>" + CFG.monthPages.map(([u, n]) => `<a href="${esc(u)}">${esc(n)}</a>`).join(""); }
+  const sources = [].concat(CFG.data);
+  const load = (i) => fetch(sources[i]).then((r) => { if (!r.ok) throw new Error(`data.json: ${r.status}`); return r.json(); })
+    .catch((err) => (i + 1 < sources.length ? load(i + 1) : Promise.reject(err)));
+  if ((CFG.host || CFG.prod) && !T && CFG.note) { const n = $(".note"); if (n) n.innerHTML = CFG.note; }
+  goal("view");
+  load(0).then((d) => {
+    D = d;
+    if (!D.m || !D.dest) throw new Error("данные демо старого формата");
+    month = new Date().getMonth() + 2 > 12 ? 1 : new Date().getMonth() + 2;   // по умолчанию — следующий месяц
+    // ссылка со страницы месяца или присланная туристу: ?m=12&c=Египет — сразу этот месяц и страна
+    const u = new URLSearchParams(location.search), um = Number(u.get("m")), uc = u.get("c");
+    if (um >= 1 && um <= 12) month = um;
+    if (uc && Object.keys(D.climate).some((k) => k.startsWith(uc + "|"))) country = uc;
+    if (T) $("#built").textContent = `Данные обновлены ${d.built.split("-").reverse().join(".")}.`;
+    else $("#foot").textContent += ` Расчёт ${d.built}.`;
+    renderAll();
+    if (country) $("#detail").scrollIntoView({ block: "start" });
+  }).catch((err) => { $("#countries-note").textContent = `Не удалось загрузить данные${T ? "" : " демо"} (${err.message}). Обновите страницу.`; });
+})();
+</script>
+</body>
+</html>
